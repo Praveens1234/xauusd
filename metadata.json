@@ -1,0 +1,6 @@
+{
+  "name": "Gold Live",
+  "description": "XAUUSD Live Pricing widget and tracker with up-to-the-second home screen updates and custom sparkline charts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
