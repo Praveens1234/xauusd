@@ -16,6 +16,8 @@ object WidgetSettingsManager {
     private const val KEY_HIGH_24H = "high_24h"
     private const val KEY_LOW_24H = "low_24h"
     private const val KEY_ALARMS = "price_alarms"
+    private const val KEY_PRICING_SOURCE = "pricing_source"
+    private const val KEY_MICRO_FLUC = "micro_fluctuation_enabled"
 
     private const val MAX_HISTORY_POINTS = 20
 
@@ -41,6 +43,14 @@ object WidgetSettingsManager {
 
     fun setLiveSyncEnabled(context: Context, enabled: Boolean) {
         getPrefs(context).edit().putBoolean(KEY_LIVE_SYNC, enabled).apply()
+    }
+
+    fun getPricingSource(context: Context): String {
+        return getPrefs(context).getString(KEY_PRICING_SOURCE, "TRADING_VIEW") ?: "TRADING_VIEW"
+    }
+
+    fun setPricingSource(context: Context, source: String) {
+        getPrefs(context).edit().putString(KEY_PRICING_SOURCE, source).apply()
     }
 
     @Synchronized
@@ -189,5 +199,13 @@ object WidgetSettingsManager {
 
     fun resetAllAlarms(context: Context) {
         saveAlarms(context, emptyList())
+    }
+
+    fun isMicroFluctuationEnabled(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_MICRO_FLUC, true)
+    }
+
+    fun setMicroFluctuationEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_MICRO_FLUC, enabled).apply()
     }
 }

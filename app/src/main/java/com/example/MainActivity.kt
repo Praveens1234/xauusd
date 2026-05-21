@@ -82,6 +82,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        com.example.data.AlarmSoundManager.stopAlarm(this)
+    }
+
     private fun startSyncService(context: Context) {
         val serviceIntent = Intent(context, XauUsdWidgetService::class.java).apply {
             action = XauUsdWidgetService.ACTION_START_SYNC
@@ -112,9 +117,12 @@ fun DashboardScreen(modifier: Modifier = Modifier) {
     var alarmList by remember { mutableStateOf(WidgetSettingsManager.getAlarms(context)) }
     var updateInterval by remember { mutableStateOf(WidgetSettingsManager.getUpdateIntervalSec(context)) }
     var isLiveSyncEnabled by remember { mutableStateOf(WidgetSettingsManager.isLiveSyncEnabled(context)) }
+    var pricingSource by remember { mutableStateOf(WidgetSettingsManager.getPricingSource(context)) }
+    var isMicroFlucEnabled by remember { mutableStateOf(WidgetSettingsManager.isMicroFluctuationEnabled(context)) }
     
     var isRefreshing by remember { mutableStateOf(false) }
     var lastUpdateText by remember { mutableStateOf("Ready") }
+    var lastStatsFetchTime by remember { mutableStateOf(0L) }
 
     // Request POST_NOTIFICATIONS permission for Android 13+
     var hasNotificationPermission by remember {
@@ -149,11 +157,27 @@ fun DashboardScreen(modifier: Modifier = Modifier) {
     val refreshData = suspend {
         isRefreshing = true
         try {
-            val livePrice = GoldPriceFetcher.fetchLivePrice()
-            val stats = GoldPriceFetcher.fetch24hStats()
+            val livePrice = GoldPriceFetcher.fetchLivePrice(context)
+            
+            val nowTime = System.currentTimeMillis()
+            val shouldFetchStats = (nowTime - lastStatsFetchTime) > 60_000L || prevClose == 0.0
+            
+            val stats = if (shouldFetchStats) {
+                val fetched = GoldPriceFetcher.fetch24hStats()
+                if (fetched != null) {
+                    lastStatsFetchTime = nowTime
+                }
+                fetched
+            } else {
+                null
+            }
+
             if (livePrice != null) {
                 WidgetSettingsManager.setLastPrice(context, livePrice)
                 lastPrice = livePrice
+                
+                // Immediately check and trigger price target alarms robustly
+                com.example.data.PriceAlarmEngine.checkAndTriggerAlarms(context, livePrice)
             }
             if (stats != null) {
                 WidgetSettingsManager.setPrevClosePrice(context, stats.open)
@@ -176,7 +200,7 @@ fun DashboardScreen(modifier: Modifier = Modifier) {
             }
             context.startService(serviceIntent)
         } catch (e: Exception) {
-            Toast.makeText(context, "Refresh failed: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            // Log or show toast silently depending on background context
         } finally {
             isRefreshing = false
         }
@@ -1017,6 +1041,48 @@ fun DashboardScreen(modifier: Modifier = Modifier) {
                         HorizontalDivider(color = Color(0xFFF4DDDB))
                         Spacer(modifier = Modifier.height(16.dp))
 
+                        // Live Micro Fluctuation Anti-Freeze Ticks Switch
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Anti-Freezing Price Ticks",
+                                    color = Color(0xFF201A1B),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = "Ensures active cent flicker during weekends and flat hours of spot gold markets.",
+                                    color = Color(0xFF524343),
+                                    fontSize = 11.sp
+                                )
+                            }
+                            Switch(
+                                checked = isMicroFlucEnabled,
+                                onCheckedChange = { checked ->
+                                    isMicroFlucEnabled = checked
+                                    WidgetSettingsManager.setMicroFluctuationEnabled(context, checked)
+                                    scope.launch {
+                                        refreshData()
+                                    }
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color(0xFF7D5260),
+                                    checkedTrackColor = Color(0xFFFFDAD9),
+                                    uncheckedThumbColor = Color.White,
+                                    uncheckedTrackColor = Color(0xFFE0C4C1)
+                                ),
+                                modifier = Modifier.testTag("micro_fluc_switch")
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        HorizontalDivider(color = Color(0xFFF4DDDB))
+                        Spacer(modifier = Modifier.height(16.dp))
+
                         // Update Interval Selector
                         Text(
                             text = "Background Feed Interval: ${updateInterval}s",
@@ -1067,6 +1133,77 @@ fun DashboardScreen(modifier: Modifier = Modifier) {
                                         color = if (isSelected) Color.White else Color(0xFF201A1B),
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 12.sp
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        HorizontalDivider(color = Color(0xFFF4DDDB))
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Pricing Feed Provider Selection
+                        Text(
+                            text = "Gold Pricing Feed Provider",
+                            color = Color(0xFF201A1B),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = "TradingView is default (recommended live CFD). Swiss Dukascopy and Gold-API are available as spot fallbacks.",
+                            color = Color(0xFF524343),
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
+
+                        val sources = listOf(
+                            "TRADING_VIEW" to "TradingView",
+                            "DUKASCOPY" to "Dukascopy",
+                            "GOLD_API" to "Gold-API"
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            sources.forEach { (srcKey, srcLabel) ->
+                                val isSelected = pricingSource == srcKey
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (isSelected) Color(0xFF7D5260) else Color.White)
+                                        .border(
+                                            1.dp,
+                                            if (isSelected) Color(0xFF7D5260) else Color(0xFFF4DDDB),
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .clickable {
+                                            pricingSource = srcKey
+                                            WidgetSettingsManager.setPricingSource(context, srcKey)
+                                            
+                                            // Force update immediate local and active service feeds
+                                            scope.launch {
+                                                refreshData()
+                                            }
+                                            
+                                            // Send sync broadcast / command to active service
+                                            val serviceIntent = Intent(context, XauUsdWidgetService::class.java).apply {
+                                                action = XauUsdWidgetService.ACTION_START_SYNC
+                                            }
+                                            context.startService(serviceIntent)
+                                            
+                                            Toast.makeText(context, "Provider: $srcLabel", Toast.LENGTH_SHORT).show()
+                                        }
+                                        .padding(vertical = 10.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = srcLabel,
+                                        color = if (isSelected) Color.White else Color(0xFF201A1B),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp,
+                                        textAlign = TextAlign.Center
                                     )
                                 }
                             }
